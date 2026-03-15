@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FuelStat Pro | India</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+        body { font-family: 'Inter', sans-serif; background: #000; color: #e0e0e0; margin: 0; }
+        .obsidian-card { background: rgba(15, 15, 15, 0.7); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.08); }
+        .orange-glow { box-shadow: 0 0 40px -15px rgba(234, 88, 12, 0.4); }
+    </style>
+</head>
+<body class="antialiased">
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        const { useState, useEffect } = React;
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getFirestore, collection, onSnapshot, doc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+        // --- STEP 1: PASTE YOUR CONFIG HERE ---
+        // Replace the { } below with the config from your Firebase Project Settings
+        const firebaseConfig = {
+  apiKey: "AIzaSyALqSCGkQtKR0Q_ckyvAK1z0D_FxyEip5E",
+  authDomain: "fuelstat-62b45.firebaseapp.com",
+  databaseURL: "https://fuelstat-62b45-default-rtdb.firebaseio.com",
+  projectId: "fuelstat-62b45",
+  storageBucket: "fuelstat-62b45.firebasestorage.app",
+  messagingSenderId: "921833323231",
+  appId: "1:921833323231:web:0ea3574eee4367ef79076a",
+  measurementId: "G-4SYMMZ239H"
+};
+
+        const appId = 'fuel-stat-public-v16-agg';
+
+        const App = () => {
+            const [selectedState, setSelectedState] = useState('Maharashtra');
+            const [fuelData, setFuelData] = useState({});
+            const [loading, setLoading] = useState(true);
+            const [status, setStatus] = useState({ node_status: 'OFFLINE', last_sync: null });
+
+            useEffect(() => {
+                if (firebaseConfig.apiKey === "YOUR_API_KEY") return;
+                try {
+                    const app = initializeApp(firebaseConfig);
+                    const db = getFirestore(app);
+                    const dataRef = collection(db, 'artifacts', appId, 'public', 'data', 'fuel_rates');
+                    const statusRef = doc(db, 'artifacts', appId, 'public', 'data', 'status', 'latest');
+
+                    onSnapshot(dataRef, (snapshot) => {
+                        const data = {};
+                        snapshot.forEach(doc => { data[doc.id] = doc.data(); });
+                        setFuelData(data);
+                        setLoading(false);
+                    });
+
+                    onSnapshot(statusRef, (doc) => {
+                        if (doc.exists()) setStatus(doc.data());
+                    });
+                } catch (e) { console.error(e); }
+            }, []);
+
+            useEffect(() => { if (window.lucide) window.lucide.createIcons(); });
+
+            return (
+                <div className="min-h-screen pb-32">
+                    <header className="border-b border-white/5 bg-black/80 backdrop-blur-md sticky top-0 z-50 px-6 py-5">
+                        <div className="max-w-5xl mx-auto flex justify-between items-center">
+                            <h1 className="text-xl font-black uppercase italic">FuelStat Pro</h1>
+                            <div className="text-[9px] font-black uppercase tracking-widest text-zinc-500 bg-white/5 px-4 py-2 rounded-full border border-white/10">
+                                <span className={`inline-block w-1.5 h-1.5 rounded-full mr-2 ${status.node_status === 'ONLINE' ? 'bg-green-500' : 'bg-red-500'}`}></span>
+                                Node: {status.node_status}
+                            </div>
+                        </div>
+                    </header>
+
+                    <main className="max-w-5xl mx-auto px-6 py-12">
+                        {firebaseConfig.apiKey === "YOUR_API_KEY" ? (
+                            <div className="p-8 bg-orange-600/10 border border-orange-500/20 rounded-3xl text-orange-500 text-sm font-bold text-center">
+                                ACTION REQUIRED: Open index.html and paste your Firebase Config inside the code!
+                            </div>
+                        ) : loading ? (
+                            <div className="h-64 flex flex-col items-center justify-center gap-4 text-zinc-600">
+                                <div className="w-8 h-8 border-2 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
+                                <p className="text-[10px] uppercase tracking-widest font-black">Connecting to OMC Satellite...</p>
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-1 lg:grid-cols-12 gap-12">
+                                <div className="lg:col-span-4">
+                                    <h2 className="text-[10px] uppercase tracking-widest text-orange-500 font-black mb-6">Sectors</h2>
+                                    {Object.keys(fuelData).map(state => (
+                                        <button key={state} onClick={() => setSelectedState(state)} className={`w-full text-left p-4 rounded-xl mb-2 font-black uppercase text-xs ${selectedState === state ? 'bg-orange-600' : 'bg-white/5'}`}>
+                                            {state}
+                                        </button>
+                                    ))}
+                                </div>
+                                <div className="lg:col-span-8">
+                                    <h2 className="text-5xl font-black italic uppercase mb-10">{selectedState} Ledger</h2>
+                                    {Object.keys(fuelData[selectedState] || {}).map(city => (
+                                        <div key={city} className="obsidian-card p-10 rounded-[2.5rem] mb-6">
+                                            <h3 className="text-2xl font-black uppercase mb-6">{city}</h3>
+                                            <div className="grid grid-cols-3 gap-4 text-center">
+                                                <div className="bg-white/5 p-4 rounded-2xl">
+                                                    <p className="text-[8px] text-zinc-500 font-black uppercase mb-1">Petrol</p>
+                                                    <span className="text-2xl font-black italic">₹{fuelData[selectedState][city].petrol?.normal}</span>
+                                                </div>
+                                                <div className="bg-white/5 p-4 rounded-2xl">
+                                                    <p className="text-[8px] text-zinc-600 font-black uppercase mb-1">Diesel</p>
+                                                    <span className="text-2xl font-black italic">₹{fuelData[selectedState][city].diesel?.normal}</span>
+                                                </div>
+                                                <div className="bg-orange-600/10 p-4 rounded-2xl border border-orange-500/20">
+                                                    <p className="text-[8px] text-orange-500 font-black uppercase mb-1">LPG</p>
+                                                    <span className="text-2xl font-black italic text-orange-500">₹{fuelData[selectedState][city].lpg?.domestic}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </main>
+                </div>
+            );
+        };
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>
