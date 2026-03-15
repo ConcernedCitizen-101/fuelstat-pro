@@ -4,28 +4,36 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FuelStat Pro | India</title>
+    <!-- Tailwind CSS for Cinematic Styling -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM (Stable UMD versions) -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel for in-browser JSX translation -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <!-- Firebase Compat Library: These are global scripts that prevent "require" errors -->
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+    
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
         body { font-family: 'Inter', sans-serif; background: #000; color: #e0e0e0; margin: 0; }
-        .obsidian-card { background: rgba(15, 15, 15, 0.7); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.08); }
+        .obsidian-card { background: rgba(15, 15, 15, 0.7); backdrop-filter: blur(24px); border: 1px solid rgba(255, 255, 255, 0.08); }
         .orange-glow { box-shadow: 0 0 40px -15px rgba(234, 88, 12, 0.4); }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
     </style>
 </head>
-<body class="antialiased">
+<body class="antialiased scrollbar-hide">
     <div id="root"></div>
 
-    <script type="text/babel" data-type="module">
+    <script type="text/babel">
         const { useState, useEffect } = React;
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getFirestore, collection, onSnapshot, doc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
-        // --- STEP 1: PASTE YOUR CONFIG HERE ---
-        // Replace the { } below with the config from your Firebase Project Settings
+        // --- STEP 1: PASTE YOUR FIREBASE CONFIG HERE ---
         const firebaseConfig = {
   apiKey: "AIzaSyALqSCGkQtKR0Q_ckyvAK1z0D_FxyEip5E",
   authDomain: "fuelstat-62b45.firebaseapp.com",
@@ -44,79 +52,191 @@
             const [fuelData, setFuelData] = useState({});
             const [loading, setLoading] = useState(true);
             const [status, setStatus] = useState({ node_status: 'OFFLINE', last_sync: null });
+            const [errorState, setErrorState] = useState(null);
 
             useEffect(() => {
-                if (firebaseConfig.apiKey === "YOUR_API_KEY") return;
+                // If you haven't pasted your config yet, don't try to connect
+                if (firebaseConfig.apiKey.includes("PASTE_YOUR_API_KEY")) {
+                    setErrorState("CONFIG_MISSING");
+                    setLoading(false);
+                    return;
+                }
+
                 try {
-                    const app = initializeApp(firebaseConfig);
-                    const db = getFirestore(app);
-                    const dataRef = collection(db, 'artifacts', appId, 'public', 'data', 'fuel_rates');
-                    const statusRef = doc(db, 'artifacts', appId, 'public', 'data', 'status', 'latest');
+                    // Initialize Firebase (Using Compat globals)
+                    if (!firebase.apps.length) {
+                        firebase.initializeApp(firebaseConfig);
+                    }
+                    
+                    const db = firebase.firestore();
+                    const auth = firebase.auth();
 
-                    onSnapshot(dataRef, (snapshot) => {
-                        const data = {};
-                        snapshot.forEach(doc => { data[doc.id] = doc.data(); });
-                        setFuelData(data);
-                        setLoading(false);
+                    // Step 1: Sign in Anonymously to bypass locked Firestore rules
+                    auth.signInAnonymously().catch(err => {
+                        console.error("Auth Error:", err);
+                        if (err.code === 'auth/configuration-not-found') setErrorState("AUTH_DISABLED");
                     });
 
-                    onSnapshot(statusRef, (doc) => {
-                        if (doc.exists()) setStatus(doc.data());
+                    // Step 2: Listen for Live Updates after Auth
+                    auth.onAuthStateChanged((user) => {
+                        if (user) {
+                            const dataRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('fuel_rates');
+                            const statusRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('status').doc('latest');
+
+                            dataRef.onSnapshot((snapshot) => {
+                                const data = {};
+                                snapshot.forEach(doc => { data[doc.id] = doc.data(); });
+                                if (Object.keys(data).length > 0) {
+                                    setFuelData(data);
+                                    setLoading(false);
+                                    setErrorState(null);
+                                } else {
+                                    setErrorState("EMPTY_DB");
+                                }
+                            }, (err) => {
+                                console.error("Firestore Error:", err);
+                                if (err.code === 'permission-denied') setErrorState("PERMISSION_DENIED");
+                            });
+
+                            statusRef.onSnapshot((doc) => {
+                                if (doc.exists) setStatus(doc.data());
+                            });
+                        }
                     });
-                } catch (e) { console.error(e); }
+                } catch (e) {
+                    console.error("Critical Failure:", e);
+                    setErrorState("CRITICAL_ERROR");
+                }
             }, []);
 
-            useEffect(() => { if (window.lucide) window.lucide.createIcons(); });
+            // Ensure Lucide icons refresh when data or state changes
+            useEffect(() => {
+                if (window.lucide) window.lucide.createIcons();
+            });
+
+            const currentStateData = fuelData[selectedState] || {};
+            const cities = Object.keys(currentStateData);
+
+            // --- Error & Setup Screens ---
+            if (errorState === "CONFIG_MISSING") {
+                return (
+                    <div className="min-h-screen flex items-center justify-center p-8 text-center bg-black">
+                        <div className="max-w-md obsidian-card p-12 rounded-[2.5rem] border-orange-500/20">
+                            <i data-lucide="key" className="w-12 h-12 text-orange-500 mx-auto mb-6"></i>
+                            <h2 className="text-xl font-black uppercase mb-4 tracking-tighter">Config Required</h2>
+                            <p className="text-zinc-500 text-xs leading-relaxed mb-6">
+                                You need to open your <span className="text-white">index.html</span> and paste your Firebase Project Configuration inside the <code>firebaseConfig</code> object.
+                            </p>
+                            <div className="text-[10px] bg-white/5 p-3 rounded font-mono text-zinc-400">Firebase > Settings > General > Your Apps</div>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (errorState === "AUTH_DISABLED") {
+                return (
+                    <div className="min-h-screen flex items-center justify-center p-8 text-center bg-black">
+                        <div className="max-w-md obsidian-card p-12 rounded-[2.5rem] border-orange-500/20">
+                            <i data-lucide="shield-alert" className="w-12 h-12 text-orange-500 mx-auto mb-6"></i>
+                            <h2 className="text-xl font-black uppercase mb-4 tracking-tighter">Authentication Disabled</h2>
+                            <p className="text-zinc-500 text-xs leading-relaxed mb-8">
+                                Anonymous Sign-in is not enabled in your Firebase Console. <br/><br/>
+                                1. Go to <b>Build > Authentication</b> <br/>
+                                2. Tab: <b>Sign-in Method</b> <br/>
+                                3. Enable <b>Anonymous</b>
+                            </p>
+                            <button onClick={() => window.location.reload()} className="w-full bg-orange-600 text-white py-4 rounded-2xl font-black uppercase text-[10px] tracking-widest hover:bg-orange-500 transition-colors">I've Enabled It, Refresh</button>
+                        </div>
+                    </div>
+                );
+            }
 
             return (
                 <div className="min-h-screen pb-32">
-                    <header className="border-b border-white/5 bg-black/80 backdrop-blur-md sticky top-0 z-50 px-6 py-5">
-                        <div className="max-w-5xl mx-auto flex justify-between items-center">
-                            <h1 className="text-xl font-black uppercase italic">FuelStat Pro</h1>
-                            <div className="text-[9px] font-black uppercase tracking-widest text-zinc-500 bg-white/5 px-4 py-2 rounded-full border border-white/10">
-                                <span className={`inline-block w-1.5 h-1.5 rounded-full mr-2 ${status.node_status === 'ONLINE' ? 'bg-green-500' : 'bg-red-500'}`}></span>
-                                Node: {status.node_status}
+                    <header className="border-b border-white/5 bg-black/80 backdrop-blur-md sticky top-0 z-50">
+                        <div className="max-w-5xl mx-auto px-6 py-6 flex items-center justify-between">
+                            <div className="flex items-center gap-4">
+                                <div className="w-10 h-10 bg-orange-600 rounded-xl flex items-center justify-center orange-glow">
+                                    <i data-lucide="droplets" className="text-white w-6 h-6"></i>
+                                </div>
+                                <div>
+                                    <h1 className="text-xl font-black uppercase tracking-tighter text-white italic leading-none">FuelStat India</h1>
+                                    <div className="flex items-center gap-2 mt-2">
+                                        <span className={`w-1.5 h-1.5 rounded-full ${status.node_status === 'ONLINE' ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
+                                        <p className="text-[9px] uppercase tracking-widest text-zinc-600 font-black">Node: {status.node_status}</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-4 text-[9px] font-black uppercase tracking-widest text-zinc-500 bg-white/5 px-4 py-2 rounded-full border border-white/10">
+                                <i data-lucide="clock" className="w-3 h-3 text-orange-500" />
+                                <span>Sync: {status.last_sync ? new Date(status.last_sync.seconds * 1000).toLocaleTimeString() : 'Establishing...'}</span>
                             </div>
                         </div>
                     </header>
 
                     <main className="max-w-5xl mx-auto px-6 py-12">
-                        {firebaseConfig.apiKey === "YOUR_API_KEY" ? (
-                            <div className="p-8 bg-orange-600/10 border border-orange-500/20 rounded-3xl text-orange-500 text-sm font-bold text-center">
-                                ACTION REQUIRED: Open index.html and paste your Firebase Config inside the code!
+                        {loading ? (
+                            <div className="h-96 flex flex-col items-center justify-center gap-8">
+                                <div className="w-10 h-10 border-2 border-orange-500/20 border-t-orange-500 rounded-full animate-spin"></div>
+                                <p className="text-[10px] uppercase tracking-[0.5em] text-zinc-800 font-black italic">Decrypting Satellite Signal...</p>
                             </div>
-                        ) : loading ? (
-                            <div className="h-64 flex flex-col items-center justify-center gap-4 text-zinc-600">
-                                <div className="w-8 h-8 border-2 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
-                                <p className="text-[10px] uppercase tracking-widest font-black">Connecting to OMC Satellite...</p>
+                        ) : errorState === "EMPTY_DB" ? (
+                            <div className="p-24 border-2 border-dashed border-white/5 rounded-[3rem] text-center">
+                                <i data-lucide="database-zap" className="w-12 h-12 text-zinc-900 mx-auto mb-6 opacity-40"></i>
+                                <h2 className="text-sm font-black uppercase tracking-[0.4em] text-zinc-700">Sector Buffer Empty</h2>
+                                <p className="text-xs text-zinc-800 mt-2 italic font-bold">Bot signal not yet detected. Run the "Autopilot" workflow in GitHub Actions.</p>
                             </div>
                         ) : (
-                            <div className="grid grid-cols-1 lg:grid-cols-12 gap-12">
-                                <div className="lg:col-span-4">
-                                    <h2 className="text-[10px] uppercase tracking-widest text-orange-500 font-black mb-6">Sectors</h2>
-                                    {Object.keys(fuelData).map(state => (
-                                        <button key={state} onClick={() => setSelectedState(state)} className={`w-full text-left p-4 rounded-xl mb-2 font-black uppercase text-xs ${selectedState === state ? 'bg-orange-600' : 'bg-white/5'}`}>
-                                            {state}
+                            <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 animate-in fade-in duration-1000">
+                                <div className="lg:col-span-4 space-y-3">
+                                    <h2 className="text-[10px] uppercase tracking-[0.4em] text-orange-500 font-black mb-6 flex items-center gap-2">
+                                        <i data-lucide="map-pin" className="w-3 h-3"></i> Intelligence Hubs
+                                    </h2>
+                                    {Object.keys(fuelData).map((stateName) => (
+                                        <button
+                                            key={stateName}
+                                            onClick={() => setSelectedState(stateName)}
+                                            className={`w-full text-left px-7 py-5 rounded-2xl transition-all duration-300 flex items-center justify-between group ${
+                                                selectedState === stateName 
+                                                    ? 'bg-orange-600 text-white shadow-2xl orange-glow translate-x-1' 
+                                                    : 'bg-white/5 border border-white/5 hover:border-white/20'
+                                            }`}
+                                        >
+                                            <span className="font-black uppercase tracking-widest text-xs">{stateName}</span>
+                                            <i data-lucide="chevron-right" className={`w-4 h-4 transition-transform ${selectedState === stateName ? 'translate-x-1' : 'opacity-20'}`}></i>
                                         </button>
                                     ))}
                                 </div>
-                                <div className="lg:col-span-8">
-                                    <h2 className="text-5xl font-black italic uppercase mb-10">{selectedState} Ledger</h2>
-                                    {Object.keys(fuelData[selectedState] || {}).map(city => (
-                                        <div key={city} className="obsidian-card p-10 rounded-[2.5rem] mb-6">
-                                            <h3 className="text-2xl font-black uppercase mb-6">{city}</h3>
-                                            <div className="grid grid-cols-3 gap-4 text-center">
-                                                <div className="bg-white/5 p-4 rounded-2xl">
-                                                    <p className="text-[8px] text-zinc-500 font-black uppercase mb-1">Petrol</p>
-                                                    <span className="text-2xl font-black italic">₹{fuelData[selectedState][city].petrol?.normal}</span>
+
+                                <div className="lg:col-span-8 space-y-12">
+                                    <h2 className="text-6xl font-black italic uppercase tracking-tighter text-white">{selectedState} <span className="text-orange-600 not-italic">Ledger</span></h2>
+                                    {cities.map((cityName) => (
+                                        <div key={cityName} className="obsidian-card p-10 md:p-14 rounded-[3.5rem] group transition-all duration-700 hover:border-orange-500/20 shadow-4xl">
+                                            <div className="flex justify-between items-center mb-10">
+                                                <h3 className="text-4xl font-black uppercase tracking-tighter text-white">{cityName}</h3>
+                                                <span className="px-4 py-1.5 bg-green-500/10 text-green-500 text-[8px] font-black uppercase tracking-widest rounded-full border border-green-500/20">Verified Sector</span>
+                                            </div>
+                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                                                <div className="p-8 bg-white/5 rounded-[2rem] border border-white/5 group-hover:bg-white/10 transition-colors">
+                                                    <p className="text-[10px] text-zinc-600 font-black uppercase mb-2">Petrol / 91 Octane</p>
+                                                    <div className="flex items-baseline gap-2">
+                                                        <span className="text-xs text-zinc-600 italic font-bold">₹</span>
+                                                        <span className="text-5xl font-black italic tracking-tighter text-white">{currentStateData[cityName]?.petrol?.normal || '---'}</span>
+                                                    </div>
                                                 </div>
-                                                <div className="bg-white/5 p-4 rounded-2xl">
-                                                    <p className="text-[8px] text-zinc-600 font-black uppercase mb-1">Diesel</p>
-                                                    <span className="text-2xl font-black italic">₹{fuelData[selectedState][city].diesel?.normal}</span>
+                                                <div className="p-8 bg-white/5 rounded-[2rem] border border-white/5 group-hover:bg-white/10 transition-colors">
+                                                    <p className="text-[10px] text-zinc-600 font-black uppercase mb-2">Diesel / Normal</p>
+                                                    <div className="flex items-baseline gap-2">
+                                                        <span className="text-xs text-zinc-600 italic font-bold">₹</span>
+                                                        <span className="text-5xl font-black italic tracking-tighter text-white">{currentStateData[cityName]?.diesel?.normal || '---'}</span>
+                                                    </div>
                                                 </div>
-                                                <div className="bg-orange-600/10 p-4 rounded-2xl border border-orange-500/20">
-                                                    <p className="text-[8px] text-orange-500 font-black uppercase mb-1">LPG</p>
-                                                    <span className="text-2xl font-black italic text-orange-500">₹{fuelData[selectedState][city].lpg?.domestic}</span>
+                                                <div className="p-8 bg-orange-600/10 rounded-[2rem] border border-orange-500/20 group-hover:bg-orange-600/20 transition-colors">
+                                                    <p className="text-[10px] text-orange-500 font-black uppercase mb-2">LPG Gas / 14.2kg</p>
+                                                    <div className="flex items-baseline gap-2 text-orange-500">
+                                                        <span className="text-xs font-bold italic">₹</span>
+                                                        <span className="text-5xl font-black tracking-tighter italic">{currentStateData[cityName]?.lpg?.domestic || '---'}</span>
+                                                    </div>
                                                 </div>
                                             </div>
                                         </div>
@@ -125,11 +245,15 @@
                             </div>
                         )}
                     </main>
+                    <footer className="mt-40 text-center pb-20 opacity-20 hover:opacity-100 transition-opacity">
+                        <p className="text-[9px] font-black uppercase tracking-[1em] text-white italic">FuelStat India Public Surveillance Utility • Node v1.6</p>
+                    </footer>
                 </div>
             );
         };
 
-        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
     </script>
 </body>
 </html>
