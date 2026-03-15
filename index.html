@@ -2,19 +2,14 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>FuelStat Pro | India</title>
-    <!-- Tailwind CSS with custom config for responsiveness -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- React & ReactDOM (Stable UMD versions) -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <!-- Babel for in-browser JSX -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
     
-    <!-- Firebase Compat (Stable Global Scripts) -->
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
@@ -22,11 +17,10 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
         body { font-family: 'Inter', sans-serif; background: #000; color: #e0e0e0; margin: 0; overflow-x: hidden; width: 100vw; }
-        .obsidian-card { background: rgba(15, 15, 15, 0.7); backdrop-filter: blur(24px); border: 1px solid rgba(255, 255, 255, 0.05); }
+        .obsidian-card { background: rgba(10, 10, 10, 0.8); backdrop-filter: blur(24px); border: 1px solid rgba(255, 255, 255, 0.05); }
         .orange-glow { box-shadow: 0 0 50px -10px rgba(234, 88, 12, 0.3); }
         .scrollbar-hide::-webkit-scrollbar { display: none; }
-        @keyframes shimmer { 0% { opacity: 0.3; } 50% { opacity: 1; } 100% { opacity: 0.3; } }
-        .animate-shimmer { animation: shimmer 2s infinite; }
+        input, textarea, select { font-size: 16px !important; } /* Prevents iOS zoom on focus */
     </style>
 </head>
 <body class="antialiased scrollbar-hide">
@@ -35,7 +29,6 @@
     <script type="text/babel">
         const { useState, useEffect } = React;
 
-        // --- CONFIGURATION: ENSURE YOUR KEYS ARE HERE ---
         const firebaseConfig = {
             apiKey: "AIzaSyALqSCGkQtKR0Q_ckyvAK1z0D_FxyEip5E",
             authDomain: "fuelstat-62b45.firebaseapp.com",
@@ -50,172 +43,196 @@
         const App = () => {
             const [selectedState, setSelectedState] = useState('Maharashtra');
             const [fuelData, setFuelData] = useState({});
+            const [reports, setReports] = useState([]);
             const [loading, setLoading] = useState(true);
             const [status, setStatus] = useState({ node_status: 'OFFLINE', last_sync: null });
-            const [error, setError] = useState(null);
+            const [showModal, setShowModal] = useState(false);
+            const [isSubmitting, setIsSubmitting] = useState(false);
+            const [reportForm, setReportForm] = useState({ city: '', detail: '', fuel: 'Domestic LPG' });
 
             useEffect(() => {
-                if (!firebaseConfig.apiKey || firebaseConfig.apiKey.includes("PASTE_YOUR")) {
-                    setError("CONFIG_MISSING");
-                    setLoading(false);
-                    return;
-                }
+                if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+                const db = firebase.firestore();
+                const auth = firebase.auth();
 
-                try {
-                    if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
-                    const db = firebase.firestore();
-                    const auth = firebase.auth();
+                auth.signInAnonymously().then(() => {
+                    auth.onAuthStateChanged((user) => {
+                        if (user) {
+                            // 1. Listen for Fuel Rates
+                            db.collection('artifacts').doc(appId).collection('public').doc('data').collection('fuel_rates')
+                              .onSnapshot(snap => {
+                                const data = {};
+                                snap.forEach(doc => data[doc.id] = doc.data());
+                                setFuelData(data);
+                                setLoading(false);
+                            });
 
-                    auth.signInAnonymously().then(() => {
-                        auth.onAuthStateChanged((user) => {
-                            if (user) {
-                                const dataRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('fuel_rates');
-                                const statusRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('status').doc('latest');
+                            // 2. Listen for Status
+                            db.collection('artifacts').doc(appId).collection('public').doc('data').collection('status').doc('latest')
+                              .onSnapshot(doc => { if (doc.exists) setStatus(doc.data()); });
 
-                                dataRef.onSnapshot((snapshot) => {
-                                    const data = {};
-                                    snapshot.forEach(doc => { data[doc.id] = doc.data(); });
-                                    if (Object.keys(data).length > 0) {
-                                        setFuelData(data);
-                                        setLoading(false);
-                                        setError(null);
-                                    } else {
-                                        setError("EMPTY_DATABASE");
-                                        setLoading(false);
-                                    }
-                                }, (err) => {
-                                    if (err.code === 'permission-denied') setError("PERMISSION_DENIED");
-                                    setLoading(false);
-                                });
-
-                                statusRef.onSnapshot((doc) => {
-                                    if (doc.exists) setStatus(doc.data());
-                                });
-                            }
-                        });
-                    }).catch(err => {
-                        if (err.code === 'auth/configuration-not-found') setError("AUTH_DISABLED");
-                        setLoading(false);
+                            // 3. Listen for Citizen Reports
+                            db.collection('artifacts').doc(appId).collection('public').doc('data').collection('surcharge_reports')
+                              .orderBy('timestamp', 'desc').limit(10)
+                              .onSnapshot(snap => {
+                                const list = [];
+                                snap.forEach(doc => list.push({ id: doc.id, ...doc.data() }));
+                                setReports(list);
+                            });
+                        }
                     });
-                } catch (e) {
-                    setError("CRITICAL_ERROR");
-                    setLoading(false);
-                }
+                });
             }, []);
+
+            const handleSubmitReport = async (e) => {
+                e.preventDefault();
+                if (!reportForm.detail) return;
+                setIsSubmitting(true);
+                try {
+                    const db = firebase.firestore();
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('surcharge_reports').add({
+                        ...reportForm,
+                        state: selectedState,
+                        timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+                        verified: false
+                    });
+                    setShowModal(false);
+                    setReportForm({ ...reportForm, detail: '' });
+                } catch (err) { console.error(err); }
+                finally { setIsSubmitting(false); }
+            };
 
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); });
 
+            const currentStateData = fuelData[selectedState] || {};
+
             return (
-                <div className="min-h-screen flex flex-col">
-                    <header className="border-b border-white/5 bg-black/60 backdrop-blur-xl sticky top-0 z-50 w-full">
-                        <div className="max-w-6xl mx-auto px-4 md:px-6 py-4 md:py-6 flex items-center justify-between">
-                            <div className="flex items-center gap-3 md:gap-4">
-                                <div className="w-9 h-9 md:w-11 md:h-11 bg-orange-600 rounded-xl flex items-center justify-center orange-glow shrink-0">
-                                    <i data-lucide="droplets" className="text-white w-5 h-5 md:w-6 md:h-6"></i>
+                <div className="min-h-screen flex flex-col pb-24">
+                    <header className="border-b border-white/5 bg-black/60 backdrop-blur-xl sticky top-0 z-40 w-full">
+                        <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 bg-orange-600 rounded-xl flex items-center justify-center orange-glow shrink-0">
+                                    <i data-lucide="droplets" className="text-white w-6 h-6"></i>
                                 </div>
                                 <div className="overflow-hidden">
-                                    <h1 className="text-lg md:text-2xl font-black uppercase tracking-tighter text-white italic truncate">FuelStat India</h1>
+                                    <h1 className="text-xl font-black uppercase tracking-tighter text-white italic truncate">FuelStat India</h1>
                                     <div className="flex items-center gap-2">
-                                        <span className={`w-1.5 h-1.5 md:w-2 md:h-2 rounded-full ${status.node_status === 'ONLINE' ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
-                                        <p className="text-[8px] md:text-[10px] uppercase tracking-widest text-zinc-600 font-black">Node: {status.node_status}</p>
+                                        <span className={`w-1.5 h-1.5 rounded-full ${status.node_status === 'ONLINE' ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
+                                        <p className="text-[10px] uppercase tracking-widest text-zinc-600 font-black italic">Node: {status.node_status}</p>
                                     </div>
                                 </div>
                             </div>
-                            <div className="flex items-center gap-4 text-[8px] md:text-[10px] font-black uppercase tracking-widest text-zinc-500 bg-white/5 px-3 md:px-5 py-2 md:py-2.5 rounded-full border border-white/10 shrink-0">
-                                <i data-lucide="clock" className="w-3 h-3 md:w-3.5 md:h-3.5 text-orange-500" />
+                            <div className="flex items-center gap-4 text-[9px] font-black uppercase tracking-widest text-zinc-500 bg-white/5 px-4 py-2 rounded-full border border-white/10 shrink-0">
+                                <i data-lucide="clock" className="w-3 h-3 text-orange-500" />
                                 <span>{status.last_sync ? new Date(status.last_sync.seconds * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '...'}</span>
                             </div>
                         </div>
                     </header>
 
-                    <main className="max-w-6xl mx-auto px-4 md:px-6 py-8 md:py-16 w-full flex-grow">
+                    <main className="max-w-6xl mx-auto px-4 py-8 w-full">
                         {loading ? (
-                            <div className="h-[50vh] flex flex-col items-center justify-center gap-6">
+                            <div className="h-[60vh] flex flex-col items-center justify-center gap-6">
                                 <div className="w-10 h-10 border-2 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
-                                <p className="text-[10px] uppercase tracking-[0.4em] text-zinc-600 font-black italic">Connecting...</p>
+                                <p className="text-[10px] uppercase tracking-[0.4em] text-zinc-700 font-black italic">Decrypting Feed...</p>
                             </div>
                         ) : (
-                            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 md:gap-16">
-                                {/* Navigation */}
-                                <div className="lg:col-span-4 lg:sticky lg:top-32 h-fit">
-                                    <h2 className="text-[10px] uppercase tracking-[0.4em] text-orange-500 font-black mb-6 md:mb-10 flex items-center gap-2">
-                                        <i data-lucide="map-pin" className="w-4 h-4"></i> Active Hubs
+                            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12">
+                                {/* Side Nav */}
+                                <div className="lg:col-span-3 lg:sticky lg:top-28 h-fit">
+                                    <h2 className="text-[10px] uppercase tracking-[0.4em] text-orange-500 font-black mb-6 flex items-center gap-2">
+                                        <i data-lucide="map-pin" className="w-3 h-3"></i> Sectors
                                     </h2>
-                                    <div className="flex lg:flex-col overflow-x-auto lg:overflow-x-visible pb-4 lg:pb-0 gap-3 scrollbar-hide">
+                                    <div className="flex lg:flex-col overflow-x-auto lg:overflow-x-visible pb-4 lg:pb-0 gap-2 scrollbar-hide">
                                         {Object.keys(fuelData).map(state => (
-                                            <button 
-                                                key={state} 
-                                                onClick={() => setSelectedState(state)} 
-                                                className={`whitespace-nowrap lg:whitespace-normal text-left px-6 md:px-8 py-4 md:py-6 rounded-2xl md:rounded-3xl transition-all duration-500 flex items-center justify-between group shrink-0 lg:shrink ${
-                                                    selectedState === state ? 'bg-orange-600 text-white shadow-2xl orange-glow lg:translate-x-2' : 'bg-white/5 border border-white/5 hover:border-white/20'
-                                                }`}
-                                            >
-                                                <span className="font-black uppercase tracking-widest text-[10px] md:text-xs">{state}</span>
-                                                <i data-lucide="chevron-right" className={`hidden lg:block w-4 h-4 transition-transform ${selectedState === state ? 'translate-x-1' : 'opacity-10'}`}></i>
-                                            </button>
+                                            <button key={state} onClick={() => setSelectedState(state)} className={`whitespace-nowrap text-left px-6 py-4 rounded-2xl transition-all duration-300 font-black uppercase text-[10px] tracking-widest ${selectedState === state ? 'bg-orange-600 text-white shadow-xl orange-glow' : 'bg-white/5 border border-white/5'}`}>{state}</button>
                                         ))}
                                     </div>
                                 </div>
 
-                                {/* Data Feed */}
-                                <div className="lg:col-span-8 space-y-8 md:space-y-12">
-                                    <div className="flex items-baseline gap-4 mb-4 md:mb-6">
-                                        <h2 className="text-4xl md:text-7xl font-black italic uppercase tracking-tighter text-white leading-none">{selectedState}</h2>
-                                        <span className="text-orange-500 text-[8px] md:text-[10px] font-black uppercase tracking-[0.4em] bg-orange-600/10 px-3 md:px-4 py-1 md:py-1.5 rounded-full border border-orange-500/20 shrink-0">Live</span>
+                                {/* Main Content */}
+                                <div className="lg:col-span-9 space-y-12">
+                                    <div className="flex items-baseline gap-4">
+                                        <h2 className="text-5xl md:text-8xl font-black italic uppercase tracking-tighter text-white leading-none">{selectedState}</h2>
+                                        <span className="text-orange-500 text-[9px] font-black uppercase tracking-[0.4em] bg-orange-600/10 px-4 py-1.5 rounded-full border border-orange-500/20">Live</span>
                                     </div>
 
-                                    {Object.keys(fuelData[selectedState] || {}).map(city => (
-                                        <div key={city} className="obsidian-card p-6 md:p-14 rounded-[2rem] md:rounded-[4rem] group transition-all duration-700 hover:border-orange-500/20 shadow-4xl relative overflow-hidden">
-                                            <div className="absolute top-0 left-0 w-1.5 h-full bg-orange-600 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                                            <div className="flex justify-between items-center mb-8 md:mb-12">
-                                                <h3 className="text-2xl md:text-5xl font-black uppercase tracking-tighter text-white italic truncate pr-4">{city}</h3>
-                                                <div className="flex items-center gap-2 shrink-0">
-                                                    <div className="w-1.5 h-1.5 md:w-2 md:h-2 rounded-full bg-green-500"></div>
-                                                    <span className="text-[7px] md:text-[9px] font-black uppercase tracking-widest text-zinc-500">Verified</span>
-                                                </div>
-                                            </div>
-                                            
-                                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 md:gap-8">
-                                                <div className="p-6 md:p-10 bg-white/5 rounded-[1.5rem] md:rounded-[2.5rem] border border-white/5 group-hover:bg-white/10 transition-colors">
-                                                    <p className="text-[8px] md:text-[11px] text-zinc-600 font-black uppercase tracking-widest mb-2 md:mb-3">Petrol</p>
-                                                    <div className="flex items-baseline gap-1 md:gap-2">
-                                                        <span className="text-[10px] md:text-sm text-zinc-700 italic font-bold">₹</span>
-                                                        <span className="text-3xl md:text-5xl lg:text-6xl font-black italic tracking-tighter text-white">
-                                                            {fuelData[selectedState][city].petrol?.normal}
-                                                        </span>
+                                    {Object.keys(currentStateData).map(city => (
+                                        <div key={city} className="obsidian-card p-8 md:p-14 rounded-[3rem] group">
+                                            <h3 className="text-3xl md:text-5xl font-black uppercase tracking-tighter text-white italic mb-10">{city}</h3>
+                                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 md:gap-8">
+                                                <div className="p-8 bg-white/5 rounded-3xl border border-white/5">
+                                                    <p className="text-[9px] text-zinc-600 font-black uppercase tracking-widest mb-2">Petrol</p>
+                                                    <div className="flex items-baseline gap-1">
+                                                        <span className="text-xs text-zinc-700 font-bold">₹</span>
+                                                        <span className="text-4xl md:text-5xl lg:text-6xl font-black italic tracking-tighter text-white">{currentStateData[city].petrol?.normal}</span>
                                                     </div>
                                                 </div>
-                                                
-                                                <div className="p-6 md:p-10 bg-white/5 rounded-[1.5rem] md:rounded-[2.5rem] border border-white/5 group-hover:bg-white/10 transition-colors">
-                                                    <p className="text-[8px] md:text-[11px] text-zinc-600 font-black uppercase tracking-widest mb-2 md:mb-3">Diesel</p>
-                                                    <div className="flex items-baseline gap-1 md:gap-2">
-                                                        <span className="text-[10px] md:text-sm text-zinc-700 italic font-bold">₹</span>
-                                                        <span className="text-3xl md:text-5xl lg:text-6xl font-black italic tracking-tighter text-white">
-                                                            {fuelData[selectedState][city].diesel?.normal}
-                                                        </span>
+                                                <div className="p-8 bg-white/5 rounded-3xl border border-white/5">
+                                                    <p className="text-[9px] text-zinc-600 font-black uppercase tracking-widest mb-2">Diesel</p>
+                                                    <div className="flex items-baseline gap-1">
+                                                        <span className="text-xs text-zinc-700 font-bold">₹</span>
+                                                        <span className="text-4xl md:text-5xl lg:text-6xl font-black italic tracking-tighter text-white">{currentStateData[city].diesel?.normal}</span>
                                                     </div>
                                                 </div>
-
-                                                <div className="p-6 md:p-10 bg-orange-600/10 rounded-[1.5rem] md:rounded-[2.5rem] border border-orange-500/20 col-span-1 sm:col-span-2 md:col-span-1">
-                                                    <p className="text-[8px] md:text-[11px] text-orange-500 font-black uppercase tracking-widest mb-2 md:mb-3">LPG Gas</p>
-                                                    <div className="flex items-baseline gap-1 md:gap-2 text-orange-500">
-                                                        <span className="text-[10px] md:text-sm font-bold italic">₹</span>
-                                                        <span className="text-3xl md:text-5xl lg:text-6xl font-black italic tracking-tighter">
-                                                            {fuelData[selectedState][city].lpg?.domestic}
-                                                        </span>
+                                                <div className="p-8 bg-orange-600/10 rounded-3xl border border-orange-500/20">
+                                                    <p className="text-[9px] text-orange-500 font-black uppercase tracking-widest mb-2">LPG Gas</p>
+                                                    <div className="flex items-baseline gap-1 text-orange-500">
+                                                        <span className="text-xs font-bold">₹</span>
+                                                        <span className="text-4xl md:text-5xl lg:text-6xl font-black italic tracking-tighter leading-none">{currentStateData[city].lpg?.domestic}</span>
                                                     </div>
                                                 </div>
                                             </div>
                                         </div>
                                     ))}
+
+                                    {/* Intelligence Feed */}
+                                    <div className="pt-12 border-t border-white/5">
+                                        <div className="flex items-center gap-3 mb-8">
+                                            <i data-lucide="shield-alert" className="w-5 h-5 text-red-600" />
+                                            <h3 className="text-[10px] font-black uppercase tracking-[0.5em] text-zinc-500 italic">Citizen Intelligence Feed</h3>
+                                        </div>
+                                        <div className="space-y-4">
+                                            {reports.length > 0 ? reports.map(r => (
+                                                <div key={r.id} className="bg-white/5 p-8 rounded-3xl border border-white/5">
+                                                    <div className="flex justify-between items-center mb-4">
+                                                        <span className="text-[10px] font-black text-white uppercase tracking-wider">{r.city} • {r.fuel}</span>
+                                                        <span className="text-[8px] text-zinc-700 font-bold uppercase tracking-widest">{r.timestamp ? new Date(r.timestamp.seconds * 1000).toLocaleTimeString() : 'Just Now'}</span>
+                                                    </div>
+                                                    <p className="text-sm text-zinc-400 font-medium leading-relaxed italic">"{r.detail}"</p>
+                                                </div>
+                                            )) : (
+                                                <div className="py-20 text-center border-2 border-dashed border-white/5 rounded-[3rem] opacity-20 italic text-[10px] uppercase tracking-widest font-black">Scanning for Anomalies...</div>
+                                            )}
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         )}
                     </main>
 
-                    <footer className="mt-auto py-12 text-center opacity-30 px-6">
-                        <p className="text-[8px] md:text-[10px] font-black uppercase tracking-[0.5em] md:tracking-[1.2em] text-white italic">FuelStat India Public Surveillance Utility</p>
-                    </footer>
+                    {/* Floating Action Bar */}
+                    <div className="fixed bottom-8 left-1/2 -translate-x-1/2 w-full max-w-sm px-6 z-40">
+                        <button onClick={() => setShowModal(true)} className="w-full bg-white text-black font-black py-6 rounded-3xl uppercase tracking-[0.4em] text-[10px] shadow-2xl hover:scale-[1.02] transition-all active:scale-95 italic">Submit Intelligence</button>
+                    </div>
+
+                    {/* Report Modal */}
+                    {showModal && (
+                        <div className="fixed inset-0 bg-black/95 backdrop-blur-3xl z-50 flex items-center justify-center p-6 animate-in fade-in duration-300">
+                            <div className="obsidian-card w-full max-w-sm p-10 rounded-[3rem] relative">
+                                <button onClick={() => setShowModal(false)} className="absolute top-8 right-8 text-zinc-600"><i data-lucide="x" /></button>
+                                <h3 className="text-3xl font-black text-white mb-2 italic tracking-tighter">Citizen Intel</h3>
+                                <p className="text-[9px] text-zinc-500 font-black uppercase tracking-[0.4em] mb-10">Sector: {selectedState}</p>
+                                <form onSubmit={handleSubmitReport} className="space-y-6">
+                                    <input type="text" placeholder="City Name" required className="w-full bg-black border border-white/5 p-4 rounded-xl text-white font-bold" value={reportForm.city} onChange={e => setReportForm({...reportForm, city: e.target.value})} />
+                                    <select className="w-full bg-black border border-white/5 p-4 rounded-xl text-white font-bold appearance-none" value={reportForm.fuel} onChange={e => setReportForm({...reportForm, fuel: e.target.value})}>
+                                        <option>Domestic LPG</option><option>Normal Petrol</option><option>Diesel</option>
+                                    </select>
+                                    <textarea placeholder="Details of malpractice..." required className="w-full bg-black border border-white/5 p-6 rounded-2xl text-white font-medium h-32 resize-none" value={reportForm.detail} onChange={e => setReportForm({...reportForm, detail: e.target.value})} />
+                                    <button disabled={isSubmitting} className="w-full bg-orange-600 text-white py-5 rounded-2xl font-black uppercase tracking-widest text-[10px]">{isSubmitting ? "Transmitting..." : "Broadcast Intelligence"}</button>
+                                </form>
+                            </div>
+                        </div>
+                    )}
                 </div>
             );
         };
